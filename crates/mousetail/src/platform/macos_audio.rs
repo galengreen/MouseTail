@@ -12,10 +12,12 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use mousetail_core::audio::{AudioPacket, Playout, Receiver};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 /// How long without packets before the output device is released.
 const IDLE: Duration = Duration::from_secs(3);
+/// The output buffer to ask for: about 5 ms (macOS defaults to 512 frames, about 11 ms).
+const OUTPUT_FRAMES: u32 = 256;
 
 pub struct Player {
     tx: mpsc::Sender<AudioPacket>,
@@ -53,6 +55,7 @@ fn run(rx: mpsc::Receiver<AudioPacket>) {
     loop {
         match rx.recv_timeout(Duration::from_millis(250)) {
             Ok(packet) => {
+                trace!(seq = packet.seq, stream = packet.stream, "sound packet");
                 last_packet = Instant::now();
                 let (pcm, fresh) = receiver.receive(&packet);
                 let mut p = playout.lock().unwrap();
@@ -102,13 +105,17 @@ fn device_name(device: &cpal::Device) -> Option<String> {
 fn open(playout: &Arc<Mutex<Playout>>) -> Option<Output> {
     let device = cpal::default_host().default_output_device()?;
     let name = device_name(&device).unwrap_or_default();
-    let config = match device.default_output_config() {
-        Ok(c) => c.config(),
+    let (mut config, buffers) = match device.default_output_config() {
+        Ok(c) => (c.config(), *c.buffer_size()),
         Err(e) => {
             warn!("no usable output format on {name}: {e}");
             return None;
         }
     };
+    // A small device buffer: sound is handed over this far ahead of playing it.
+    if let cpal::SupportedBufferSize::Range { min, max } = buffers {
+        config.buffer_size = cpal::BufferSize::Fixed(OUTPUT_FRAMES.clamp(min, max));
+    }
     let channels = config.channels as usize;
     let rate = config.sample_rate;
     let p = playout.clone();

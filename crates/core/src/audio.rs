@@ -55,7 +55,9 @@ impl Encoder {
             opusic_sys::opus_encoder_create(
                 SAMPLE_RATE as i32,
                 CHANNELS as c_int,
-                opusic_sys::OPUS_APPLICATION_AUDIO,
+                // CELT only: 2.5 ms of look-ahead instead of 6.5. At this bitrate it would
+                // pick CELT for music anyway.
+                opusic_sys::OPUS_APPLICATION_RESTRICTED_LOWDELAY,
                 &mut err,
             )
         };
@@ -214,24 +216,32 @@ impl Receiver {
 /// Fills with 48 kHz stereo; the device pulls at its own rate and channel count. Starts
 /// playing once `target` is banked and goes quiet and re-buffers on underrun.
 ///
-/// The two computers' sound clocks never quite agree, so left alone the cushion would slowly
-/// drain or overfill and click every few minutes. Instead playback runs a hair faster or
-/// slower (at most 0.2%, too little to hear) to hold the cushion at its target. A dropout
-/// mid-sound means the network is choppier than the cushion allows, so it grows, and shrinks
-/// back after a calm minute. Bursts that overfill it by more than `headroom` are skipped.
+/// The cushion is sized from how the network actually behaves: each second it notes how far
+/// the cushion dipped below its average (late packets, the sender's and the sound card's
+/// own rhythm), and aims for the deepest dip of the last minute plus a little margin. Running
+/// dry mid-sound counts as a dip as deep as the cushion plus however long it stayed empty, so
+/// one dropout is enough to size it for the next. When the network calms down, the old dips
+/// age out and the cushion shrinks with them.
+///
+/// Playback runs slightly faster or slower (at most 0.5%) to hold the cushion at its target,
+/// which also absorbs the two computers' sound clocks disagreeing. Spare cushion is dropped
+/// outright where the sound is silent, and bursts that overfill it by more than `headroom`
+/// are skipped.
 pub struct Playout {
     samples: VecDeque<i16>,
     playing: bool,
-    /// The cushion to aim for, between `base` and `MAX_TARGET_MS`, in samples.
+    /// The cushion to aim for, between `MIN_TARGET_MS` and `MAX_TARGET_MS`, in samples.
     target: usize,
-    base: usize,
     headroom: usize,
     /// Fractional read position for rate conversion, in 48 kHz frames.
     phase: f64,
     /// The cushion averaged over a couple of seconds, in samples, to steer the rate by.
     level: f64,
-    /// Seconds played since the cushion last had to grow.
-    calm: f64,
+    /// The second being played, and the deepest dip (in samples) of each before it.
+    second: Second,
+    dips: VecDeque<usize>,
+    /// Ran dry mid-sound: the cushion it had been holding, and how much it's missed since.
+    starved: Option<(usize, f64)>,
     /// Fades in after a re-buffer and out from the last frame on underrun, so neither clicks.
     gain: f32,
     last: [f32; 2],
@@ -241,26 +251,38 @@ pub struct Playout {
     skipped: usize,
 }
 
+/// The cushion over one second of sound, measured after each pull.
+#[derive(Default)]
+struct Second {
+    played: f64,
+    lowest: Option<usize>,
+    sum: f64,
+    pulls: u32,
+}
+
 /// How playback has been going, for the log.
 #[derive(Debug)]
 pub struct PlayoutStats {
     pub level_ms: usize,
     pub target_ms: usize,
-    /// How much faster (or slower, negative) than the device sound is being played, which
-    /// settles at the difference between the two computers' clocks.
+    /// The deepest dip the target allows for.
+    pub worst_dip_ms: usize,
+    /// How much faster (or slower, negative) than the device sound is being played.
     pub nudge_ppm: i32,
     pub dropouts: u32,
     pub skipped_ms: usize,
 }
 
+const MIN_TARGET_MS: usize = 20;
 const MAX_TARGET_MS: usize = 160;
-const GROW_MS: usize = 20;
-const SHRINK_MS: usize = 10;
-const SHRINK_AFTER_S: f64 = 60.0;
+/// Kept above the deepest recent dip.
+const MARGIN_MS: usize = 20;
+/// How many seconds of dips the target allows for.
+const HISTORY_S: usize = 60;
 /// Rate adjustment per millisecond the cushion is off target, and its limit.
-const NUDGE_PER_MS: f64 = 0.000_05;
-const MAX_NUDGE: f64 = 0.002;
-const SMOOTHING_S: f64 = 2.0;
+const NUDGE_PER_MS: f64 = 0.000_2;
+const MAX_NUDGE: f64 = 0.005;
+const SMOOTHING_S: f64 = 1.0;
 const FADE_S: f32 = 0.005;
 /// Quieter than this, a dropout is the end of the sound rather than a glitch.
 const SILENT: f32 = 0.001;
@@ -273,16 +295,16 @@ impl Default for Playout {
 
 impl Playout {
     pub fn new(target_ms: usize, max_ms: usize) -> Self {
-        let target = target_ms * PER_MS;
         Self {
             samples: VecDeque::new(),
             playing: false,
-            target,
-            base: target,
+            target: target_ms * PER_MS,
             headroom: max_ms.saturating_sub(target_ms) * PER_MS,
             phase: 0.0,
             level: 0.0,
-            calm: 0.0,
+            second: Second::default(),
+            dips: VecDeque::new(),
+            starved: None,
             gain: 0.0,
             last: [0.0; 2],
             nudge: 0.0,
@@ -295,10 +317,16 @@ impl Playout {
         self.samples.clear();
         self.playing = false;
         self.phase = 0.0;
+        self.starved = None;
+        self.second = Second::default();
     }
 
     pub fn push(&mut self, pcm: &[i16]) {
         self.samples.extend(pcm);
+        // Sound again after running dry: that was a dip as deep as the cushion and the wait.
+        if let Some((held, missed)) = self.starved.take() {
+            self.dip(held + missed as usize);
+        }
         if self.samples.len() > self.target + self.headroom {
             let excess = self.samples.len() - self.target;
             self.samples.drain(..excess - excess % CHANNELS);
@@ -328,18 +356,15 @@ impl Playout {
         let frames = (out.len() / channels) as f64;
         let mut step = SAMPLE_RATE as f64 / rate;
         if self.playing {
+            self.skip_silence();
             let a = (frames / (rate * SMOOTHING_S)).min(1.0);
             self.level += (self.samples.len() as f64 - self.level) * a;
             let off_ms = (self.level - self.target as f64) / PER_MS as f64;
             self.nudge = (off_ms * NUDGE_PER_MS).clamp(-MAX_NUDGE, MAX_NUDGE);
             step *= 1.0 + self.nudge;
-            self.calm += frames / rate;
-            if self.calm > SHRINK_AFTER_S && self.target > self.base {
-                self.target = (self.target - SHRINK_MS * PER_MS).max(self.base);
-                self.calm = 0.0;
-            }
         }
         let fade = 1.0 / (FADE_S * rate as f32);
+        let mut loud = false;
         for frame in out.chunks_mut(channels) {
             let available = self.samples.len() / CHANNELS;
             let [l, r] = if self.playing && available >= 2 {
@@ -352,6 +377,7 @@ impl Playout {
                     (at(i, 0) * (1.0 - t) + at(i + 1, 0) * t) * self.gain,
                     (at(i, 1) * (1.0 - t) + at(i + 1, 1) * t) * self.gain,
                 ];
+                loud |= self.last.iter().any(|s| s.abs() > SILENT);
                 self.phase += step;
                 let consumed = self.phase as usize;
                 if consumed > 0 {
@@ -363,6 +389,8 @@ impl Playout {
             } else {
                 if self.playing {
                     self.underrun();
+                } else if let Some((_, missed)) = &mut self.starved {
+                    *missed += SAMPLE_RATE as f64 / rate * CHANNELS as f64;
                 }
                 let g = (1.0 - fade).max(0.0);
                 self.last = self.last.map(|s| if s.abs() < 1e-6 { 0.0 } else { s * g });
@@ -377,6 +405,20 @@ impl Playout {
                 }
             }
         }
+        // Only while there's sound: at its end the cushion runs down on purpose.
+        if self.playing && loud {
+            let s = &mut self.second;
+            let now = self.samples.len();
+            s.lowest = Some(s.lowest.map_or(now, |l| l.min(now)));
+            s.sum += now as f64;
+            s.pulls += 1;
+            s.played += frames / rate;
+            if s.played >= 1.0 {
+                let s = std::mem::take(&mut self.second);
+                let average = (s.sum / s.pulls as f64) as usize;
+                self.dip(average.saturating_sub(s.lowest.unwrap_or(0)));
+            }
+        }
     }
 
     /// How it's going, counting dropouts and skips since the last call.
@@ -384,22 +426,50 @@ impl Playout {
         PlayoutStats {
             level_ms: self.level_ms(),
             target_ms: self.target_ms(),
+            worst_dip_ms: self.dips.iter().max().copied().unwrap_or(0) / PER_MS,
             nudge_ppm: (self.nudge * 1e6) as i32,
             dropouts: std::mem::take(&mut self.dropouts),
             skipped_ms: std::mem::take(&mut self.skipped) / PER_MS,
         }
     }
 
+    /// Drop spare cushion where it won't be heard: whole silent 10 ms stretches.
+    fn skip_silence(&mut self) {
+        let spare = MARGIN_MS * PER_MS;
+        let chunk = FRAME * CHANNELS;
+        while self.samples.len() > self.target + spare + chunk
+            && self
+                .samples
+                .range(..chunk)
+                .all(|s| (s.unsigned_abs() as f32) < SILENT * 32768.0)
+        {
+            self.samples.drain(..chunk);
+            self.level -= chunk as f64;
+            self.skipped += chunk;
+        }
+    }
+
     fn underrun(&mut self) {
         self.playing = false;
-        let mid_sound = self.last.iter().any(|s| s.abs() > SILENT);
-        if mid_sound {
+        if self.last.iter().any(|s| s.abs() > SILENT) {
             self.dropouts += 1;
+            self.starved = Some((self.level as usize, 0.0));
         }
-        if mid_sound && self.target < MAX_TARGET_MS * PER_MS {
-            self.target = (self.target + GROW_MS * PER_MS).min(MAX_TARGET_MS * PER_MS);
-            self.calm = 0.0;
+    }
+
+    /// The cushion has dipped `by` samples below its average.
+    fn dip(&mut self, by: usize) {
+        self.dips.push_back(by);
+        if self.dips.len() > HISTORY_S {
+            self.dips.pop_front();
         }
+        self.retarget();
+    }
+
+    fn retarget(&mut self) {
+        let worst = self.dips.iter().max().copied().unwrap_or(0);
+        self.target =
+            (worst + MARGIN_MS * PER_MS).clamp(MIN_TARGET_MS * PER_MS, MAX_TARGET_MS * PER_MS);
     }
 }
 
@@ -536,8 +606,9 @@ mod tests {
     }
 
     /// Play `minutes` of sound arriving `ppm` fast (negative: slow) relative to the output,
-    /// in 10 ms packets, and return the lowest and highest cushion seen once playing.
-    fn drift(ppm: f64, minutes: usize) -> (usize, usize) {
+    /// in 10 ms packets, and return the lowest and highest cushion seen once settled, and
+    /// how many times it ran dry.
+    fn drift(ppm: f64, minutes: usize) -> (usize, usize, u32) {
         let mut p = Playout::default();
         let mut out = vec![0.0f32; 480 * 2];
         let mut owed = 0.0;
@@ -548,29 +619,30 @@ mod tests {
             owed -= n as f64;
             p.push(&tone(n, 0));
             p.pull(&mut out, 2, 48_000);
-            if tick > 100 {
+            if tick > 9000 {
                 low = low.min(p.level_ms());
                 high = high.max(p.level_ms());
             }
         }
-        (low, high)
+        (low, high, p.stats().dropouts)
     }
 
     #[test]
     fn playout_holds_its_cushion_when_the_clocks_disagree() {
-        // Uncorrected, 300 ppm is 18 ms a minute: 40 ms of cushion gone in a little over two.
-        // (Measured just after each pull, so up to one 10 ms packet short.)
+        // Uncorrected, 300 ppm is 18 ms a minute: the cushion would be gone within two.
+        // On a network this steady it settles at the smallest cushion (measured just after
+        // each pull, so a 10 ms pull short) and stays put.
         for ppm in [300.0, -300.0] {
-            let (low, high) = drift(ppm, 5);
+            let (low, high, dropouts) = drift(ppm, 5);
             assert!(
-                low >= 20 && high <= 50,
-                "{ppm} ppm: cushion wandered {low}..{high} ms"
+                dropouts == 0 && low >= 5 && high <= 35,
+                "{ppm} ppm: cushion wandered {low}..{high} ms, {dropouts} dropouts"
             );
         }
     }
 
     #[test]
-    fn playout_grows_its_cushion_after_a_dropout_and_fades_rather_than_clicks() {
+    fn playout_sizes_its_cushion_from_a_dropout_and_fades_rather_than_clicks() {
         let mut p = Playout::new(40, 120);
         let mut out = vec![0.0f32; 480 * 2];
         let loud = vec![20_000i16; 4800];
@@ -578,17 +650,61 @@ mod tests {
         for _ in 0..10 {
             p.pull(&mut out, 2, 48_000);
         }
-        // Ran dry mid-sound: no jump to silence, and a bigger cushion from now on.
+        // Ran dry mid-sound: no jump to silence.
         assert!(out[out.len() - 2] > 0.0);
         let mut steps = out.windows(2).map(|w| (w[1] - w[0]).abs());
         assert!(steps.all(|d| d < 0.05), "output jumps");
-        assert_eq!(p.target_ms(), 60);
+        // 30 ms later sound is back: the cushion now covers what it held (about 97 ms) and
+        // the wait, plus margin, in one go.
+        for _ in 0..3 {
+            p.pull(&mut out, 2, 48_000);
+        }
+        p.push(&loud);
+        assert!((140..=150).contains(&p.target_ms()), "{}", p.target_ms());
         // Sound that ends quietly isn't a dropout.
         let mut q = Playout::new(40, 120);
         q.push(&vec![0i16; 4800]);
         for _ in 0..12 {
             q.pull(&mut out, 2, 48_000);
         }
+        q.push(&loud);
         assert_eq!(q.target_ms(), 40);
+    }
+
+    #[test]
+    fn playout_shrinks_its_cushion_once_the_network_calms_down() {
+        let mut p = Playout::new(40, 120);
+        let mut out = vec![0.0f32; 480 * 2];
+        // A rough patch: a 100 ms stall every few seconds.
+        for tick in 0..3000 {
+            if tick % 400 >= 10 {
+                p.push(&tone(480, 0));
+            } else if tick % 400 == 9 {
+                p.push(&tone(4800, 0));
+            }
+            p.pull(&mut out, 2, 48_000);
+        }
+        assert!(p.target_ms() >= 100, "{}", p.target_ms());
+        // Then a steady minute and a bit: the cushion comes back down, sound playing a
+        // little fast to get there.
+        for _ in 0..7000 {
+            p.push(&tone(480, 0));
+            p.pull(&mut out, 2, 48_000);
+        }
+        assert!(p.target_ms() <= 30, "{}", p.target_ms());
+        assert!(p.level_ms() <= 40, "{}", p.level_ms());
+    }
+
+    #[test]
+    fn playout_drops_spare_cushion_where_it_is_silent() {
+        let mut p = Playout::new(40, 300);
+        let mut out = vec![0.0f32; 480 * 2];
+        p.push(&vec![0i16; 9600 * 2]); // 200 ms of silence
+        p.push(&tone(960, 0));
+        p.pull(&mut out, 2, 48_000);
+        // Down to within 10 ms of target + margin before playing 10 ms, and the sound after
+        // the silence is all still there.
+        assert!((50..=60).contains(&p.level_ms()), "{}", p.level_ms());
+        assert!(p.samples.iter().rev().take(960 * 2).any(|s| *s != 0));
     }
 }

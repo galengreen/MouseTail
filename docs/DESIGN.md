@@ -245,19 +245,29 @@ Sending:
   process tap, muted locally while tapped, so the sound moves rather than plays twice. It needs
   the System Audio Recording permission.
 
-Whatever is captured is encoded with Opus (48 kHz stereo, 10 ms frames, 160 kbit/s, in-band
-FEC) and sent as QUIC datagrams; silence isn't sent. The listener decodes into a playout buffer
-(40 ms cushion, conceals short gaps, re-buffers after pauses, skips ahead if it falls 80 ms
-past its cushion, resamples to the device rate) and plays through its current default output
-(cpal on macOS, a PipeWire stream on Linux), opening it only while sound is arriving. Opus is
-built in on macOS (self-contained app) and uses the system library on Linux.
+Whatever is captured is encoded with Opus (48 kHz stereo, 10 ms frames, 160 kbit/s, low-delay
+CELT-only mode) and sent as QUIC datagrams; silence isn't sent. The listener decodes into a
+playout buffer (conceals short gaps, re-buffers after pauses, resamples to the device rate) and
+plays through its current default output (cpal with a 256-frame buffer on macOS, a PipeWire
+stream on Linux), opening it only while sound is arriving. Opus is built in on macOS
+(self-contained app) and uses the system library on Linux.
 
-The two machines' sound clocks drift apart by up to a few hundred ppm, so the resampler runs up
-to 0.2% fast or slow to hold the cushion at its target instead of clicking every few minutes. A
-dropout mid-sound grows the cushion by 20 ms (to 160 ms at most), and each calm minute shrinks it
-10 ms back towards 40. Dropouts fade out and re-buffered sound fades in over 5 ms. Linux's
-virtual speaker asks PipeWire for 512-frame quanta, so packets leave evenly rather than in
-20-40 ms lumps.
+The playout buffer's cushion is sized from the network as it is: each second of sound it notes
+how far the cushion dipped below its average (late packets, and both ends' own rhythm), and it
+aims for the deepest dip of the last minute plus 20 ms, between 20 and 160 ms. Running dry
+mid-sound counts as a dip of the cushion it held plus the time it stayed empty, so one dropout
+sizes it for the next; once the network calms down the old dips age out and the cushion shrinks
+within a minute. Playback runs up to 0.5% fast or slow to hold the cushion at its target, which
+also absorbs the two machines' sound clocks drifting apart; spare cushion is dropped outright
+where the sound is silent. Dropouts fade out and re-buffered sound fades in over 5 ms. Linux's
+virtual speaker and player ask PipeWire for 256-frame quanta, so packets leave evenly and sound
+is handed over about 5 ms ahead.
+
+`research/audio-latency` measures it end to end (chirps into Linux's virtual speaker, timed
+through a tap on the Mac's player) and replays recorded packet timings through the old and new
+playout buffers. On a Wi-Fi iMac (2.4 GHz, Bluetooth sharing the radio, late packets up to
+~150 ms about once a minute) the cushion still needs ~100-150 ms; on a steady network it settles
+around 35 ms.
 
 **Media controls.** While another computer's sound is arriving, the listener presents itself
 as a media player named after that computer: on macOS the "Now Playing" app

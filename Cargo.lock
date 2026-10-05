@@ -2134,6 +2134,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "spike-audio-latency"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "core-foundation",
+ "cpal",
+ "libc",
+ "mousetail-core",
+ "objc2",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-foundation",
+ "pipewire",
+]
+
+[[package]]
 name = "spike-discovery"
 version = "0.0.0"
 dependencies = [

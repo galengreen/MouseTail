@@ -1,0 +1,22 @@
+[package]
+name = "spike-audio-latency"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+mousetail-core = { path = "../../crates/core" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+pipewire = { version = "0.10", features = ["v0_3_49"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+cpal = "0.18"
+objc2 = "0.6"
+objc2-core-audio = { version = "0.3", default-features = false, features = ["std", "AudioHardware", "objc2", "objc2-core-audio-types", "objc2-foundation"] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFDictionary"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSString", "NSValue"] }

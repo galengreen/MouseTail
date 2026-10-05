@@ -178,8 +178,8 @@ fn play(
         *pw::keys::NODE_DESCRIPTION => "MouseTail",
         *pw::keys::APP_NAME => "MouseTail",
         "application.icon-name" => "computer",
-        // About 10 ms per callback, well inside the playout buffer's 40 ms cushion.
-        *pw::keys::NODE_LATENCY => "512/48000",
+        // About 5 ms per callback: sound is handed over this far ahead of playing it.
+        *pw::keys::NODE_LATENCY => "256/48000",
     };
     if let Some(target) = target {
         props.insert(*pw::keys::TARGET_OBJECT, target);
