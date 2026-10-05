@@ -1,6 +1,14 @@
 ## What's new
 
-- 0.2.8: Sound shared from another computer glitches less. MouseTail now keeps its small
+- 0.2.9: Shared sound arrives sooner. MouseTail now sizes its buffer from how your network
+  is actually behaving, so after a choppy patch it shrinks back within a minute instead of
+  staying large for the rest of the day, and it sends and plays sound in smaller pieces. On
+  a steady network sound from the other computer now arrives in well under a tenth of a
+  second (Bluetooth headphones add their own delay on top). Dropouts are rarer too.
+
+From 0.2.8:
+
+- Sound shared from another computer glitches less. MouseTail now keeps its small
   buffer steady as the two computers' clocks drift apart, gives itself more room when the
   network gets choppy (then shrinks back), and fades over any gap instead of clicking. Linux
   also sends its sound in smaller, steadier pieces. If you still hear dropouts, a cable
