@@ -1,5 +1,13 @@
 ## What's new
 
+- 0.2.10: Sharing sound uses less CPU on Linux. Opus encoding does less work and reuses
+  its scratch buffer, and MouseTail avoids copying each audio frame into a new allocation.
+  Linux now asks PipeWire for 10 ms callbacks, matching its audio packets. This adds about
+  5 ms of capture latency. The audio format, bitrate and packet-loss protection stay the same,
+  so this release can share sound with existing copies.
+
+From 0.2.9:
+
 - 0.2.9: Shared sound arrives sooner. MouseTail now sizes its buffer from how your network
   is actually behaving, so after a choppy patch it shrinks back within a minute instead of
   staying large for the rest of the day, and it sends and plays sound in smaller pieces. On
