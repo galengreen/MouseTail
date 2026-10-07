@@ -2719,15 +2719,16 @@ fn stream_audio(pcm: std::sync::mpsc::Receiver<Vec<i16>>, conn: Connection) {
     let mut quiet = 0u32;
     while let Ok(chunk) = pcm.recv() {
         pending.extend(chunk);
-        while pending.len() >= FRAME_SAMPLES {
-            let frame: Vec<i16> = pending.drain(..FRAME_SAMPLES).collect();
+        let (frames, _) = pending.as_chunks::<FRAME_SAMPLES>();
+        let whole = frames.len() * FRAME_SAMPLES;
+        for frame in frames {
             quiet = if frame.iter().all(|s| s.unsigned_abs() < 8) {
                 quiet + 1
             } else {
                 0
             };
             if quiet <= SILENCE_FRAMES
-                && let Ok(data) = encoder.encode(&frame)
+                && let Ok(data) = encoder.encode(frame)
             {
                 let packet = Datagram::Audio(AudioPacket { stream, seq, data });
                 if conn.send_datagram(proto::encode(&packet).into()).is_err()
@@ -2738,6 +2739,7 @@ fn stream_audio(pcm: std::sync::mpsc::Receiver<Vec<i16>>, conn: Connection) {
             }
             seq = seq.wrapping_add(1);
         }
+        pending.drain(..whole);
     }
 }
 

@@ -43,7 +43,11 @@ pub struct AudioPacket {
 // ---------------------------------------------------------------------------------------------
 // Opus
 
-pub struct Encoder(*mut opusic_sys::OpusEncoder);
+pub struct Encoder {
+    raw: *mut opusic_sys::OpusEncoder,
+    /// Opus writes each packet here first, so only its encoded bytes are allocated.
+    scratch: [u8; MAX_PACKET],
+}
 
 // The encoder is only ever used from one thread at a time.
 unsafe impl Send for Encoder {}
@@ -67,6 +71,9 @@ impl Encoder {
         );
         unsafe {
             opusic_sys::opus_encoder_ctl(e, opusic_sys::OPUS_SET_BITRATE_REQUEST, BITRATE);
+            // Half the default effort (10). At 160 kbps it sounds the same, and it roughly
+            // halves the encoding cost on a slow sending machine.
+            opusic_sys::opus_encoder_ctl(e, opusic_sys::OPUS_SET_COMPLEXITY_REQUEST, 5 as c_int);
             // Carry a little redundancy so a lost Wi-Fi packet can often be rebuilt.
             opusic_sys::opus_encoder_ctl(e, opusic_sys::OPUS_SET_INBAND_FEC_REQUEST, 1 as c_int);
             opusic_sys::opus_encoder_ctl(
@@ -75,31 +82,32 @@ impl Encoder {
                 5 as c_int,
             );
         }
-        Ok(Self(e))
+        Ok(Self {
+            raw: e,
+            scratch: [0; MAX_PACKET],
+        })
     }
 
     /// Encode one frame of interleaved stereo (`FRAME * CHANNELS` samples).
     pub fn encode(&mut self, pcm: &[i16]) -> anyhow::Result<Vec<u8>> {
         anyhow::ensure!(pcm.len() == FRAME * CHANNELS, "wrong frame size");
-        let mut out = vec![0u8; MAX_PACKET];
         let n = unsafe {
             opusic_sys::opus_encode(
-                self.0,
+                self.raw,
                 pcm.as_ptr(),
                 FRAME as c_int,
-                out.as_mut_ptr(),
-                out.len() as i32,
+                self.scratch.as_mut_ptr(),
+                self.scratch.len() as i32,
             )
         };
         anyhow::ensure!(n >= 0, "opus encode: {n}");
-        out.truncate(n as usize);
-        Ok(out)
+        Ok(self.scratch[..n as usize].to_vec())
     }
 }
 
 impl Drop for Encoder {
     fn drop(&mut self) {
-        unsafe { opusic_sys::opus_encoder_destroy(self.0) }
+        unsafe { opusic_sys::opus_encoder_destroy(self.raw) }
     }
 }
 
