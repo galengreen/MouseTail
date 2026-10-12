@@ -60,17 +60,26 @@ img { display: block; }
 /* ----------------------------------------------------------------- hero */
 .panel {
   position: relative; border-radius: 2rem; overflow: hidden; isolation: isolate;
-  /* night.webp and night-small.webp are art/night.svg rendered once (its grain and shadow
-     filters are slow to draw live): see scripts/render-night.sh. */
-  background: var(--tile) url("art/night.webp") center bottom / cover no-repeat;
+  /* hero.webp: mountains, aurora and a mouse looking up at the moon; hero-small.webp is the
+     same picture at 1200 wide for the laptop's screen. */
+  background: var(--tile) url("art/hero.webp") center bottom / cover no-repeat;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06);
 }
 .hero { padding: .6rem .6rem 0; }
-.hero-panel { padding: 8.5rem 1.5rem 2.6rem; display: flex; flex-direction: column; align-items: center; }
+.hero-panel {
+  padding: 8.5rem 1.5rem 2.6rem; display: flex; flex-direction: column; align-items: center;
+  /* Fit the picture to the width (cover would crop the moon and mouse off a near-square panel)
+     and fill the sky above it with the picture's own top colour. */
+  background-color: #0e0e0e; background-size: max(100%, 68rem) auto;
+}
 .hero-panel::before {
-  /* keep the headline readable over the sky */
+  /* keep the headline readable over the sky, and fade the top of hero.webp into the fill above it
+     (--sky is roughly the picture's drawn height: 16:10 at the panel's width) */
+  --sky: calc(max(100vw - 1.2rem, 68rem) * .625);
   content: ""; position: absolute; inset: 0; z-index: -1;
-  background: radial-gradient(60% 45% at 50% 28%, rgba(8, 8, 8, .45), transparent 70%);
+  background:
+    radial-gradient(60% 45% at 50% 28%, rgba(8, 8, 8, .45), transparent 70%),
+    linear-gradient(#0e0e0e calc(100% - var(--sky)), transparent calc(100% - var(--sky) + 8rem));
 }
 .hero-copy { text-align: center; width: 100%; max-width: 52rem; min-width: 0; display: flex; flex-direction: column; align-items: center; }
 .badge {
@@ -176,7 +185,7 @@ h1 {
 .macbook { position: absolute; right: 3%; bottom: 3cqw; width: 39%; display: flex; flex-direction: column; align-items: center; }
 .mac-lid { position: relative; width: 88%; aspect-ratio: 16 / 10.3; padding: 1.5%; border-radius: 1.1cqw 1.1cqw .25cqw .25cqw; background: #0a0a0b; }
 .notch { position: absolute; left: 50%; top: 1.5%; width: 12%; height: 3.4%; transform: translateX(-50%); border-radius: 0 0 .4cqw .4cqw; background: #0a0a0b; z-index: 3; }
-.mac-screen { inset: 1.5%; border-radius: .6cqw .6cqw .15cqw .15cqw; background: var(--tile) url("art/night-small.webp") center bottom / cover; }
+.mac-screen { inset: 1.5%; border-radius: .6cqw .6cqw .15cqw .15cqw; background: var(--tile) url("art/hero-small.webp") center bottom / cover; }
 .mac-base {
   position: relative; width: 100%; height: 1.05cqw; border-radius: .1cqw .1cqw 1cqw 1cqw;
   background: linear-gradient(#ecebe6, #b4b2ac 70%, #8d8b86); box-shadow: 0 1.2cqw 2.4cqw rgba(0, 0, 0, .6);
@@ -250,16 +259,26 @@ h2 { font-weight: 500; font-size: clamp(2.3rem, 5.2vw, 3.9rem); line-height: 1.0
 .card h3 { margin: 0 0 .35rem; font-weight: 500; font-size: 1.12rem; letter-spacing: -.01em; }
 .card p { margin: 0; color: var(--muted); font-size: .95rem; }
 
-/* Card artwork: a slice of night with a small illustration. */
+/* Card artwork: a small night scene of its own (art/cards/) with a small illustration. */
 .js .art:not(.live)::before, .js .art:not(.live) *, .js .art:not(.live) *::after { animation-play-state: paused; }
 .art {
   position: relative; height: 13.5rem; overflow: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: .9rem;
   background: radial-gradient(110% 90% at 75% 0%, #2a2b2b, #161717 60%, #0e0f0f);
   border-bottom: 1px solid var(--line);
 }
-.art::after { content: ""; position: absolute; inset: 0; background: url("art/night-small.webp") center bottom / 160% auto no-repeat; opacity: .28; z-index: 0; }
-.card:nth-child(3n+2) .art::after { background-position: 30% bottom; }
-.card:nth-child(3n) .art::after { background-position: 85% bottom; }
+.art::after { content: ""; position: absolute; inset: 0; background: var(--art) center bottom / cover no-repeat; opacity: .9; z-index: 0; }
+.art-install { --art: url("art/cards/install.webp"); }
+.art-pair { --art: url("art/cards/pair.webp"); }
+.art-arrange { --art: url("art/cards/arrange.webp"); }
+.art-stuck { --art: url("art/cards/stuck.webp"); }
+.art-clip { --art: url("art/cards/clipboard.webp"); }
+.art-sound { --art: url("art/cards/sound.webp"); }
+.art-keys { --art: url("art/cards/shortcuts.webp"); }
+.art-wake { --art: url("art/cards/wake.webp"); }
+.art-path { --art: url("art/cards/path.webp"); }
+.art-ripple { --art: url("art/cards/ripple.webp"); }
+.art-scroll { --art: url("art/cards/scroll.webp"); }
+.art-pause { --art: url("art/cards/pause.webp"); }
 .art > * { position: relative; z-index: 1; }
 
 .mini-window { width: 70%; border-radius: .6rem; background: rgba(18, 18, 18, .8); border: 1px solid var(--line); padding: .5rem; display: flex; flex-wrap: wrap; gap: .3rem; }
@@ -443,7 +462,7 @@ kbd { font-family: var(--mono); padding: .3rem .5rem; border-radius: .4rem; back
 .points h3 { margin: 0 0 .2rem; font-weight: 500; font-size: 1.02rem; }
 .points p { margin: 0; color: var(--muted); font-size: .95rem; }
 .split-art { position: relative; padding: 3rem 2rem; border-radius: 1.6rem; background: radial-gradient(120% 90% at 70% 0%, #2d2e2e, var(--tile) 55%, #0e0f0f); border: 1px solid var(--line); overflow: hidden; }
-.split-art::after { content: ""; position: absolute; inset: 0; background: url("art/night.webp") center bottom / cover no-repeat; opacity: .5; }
+.split-art::after { content: ""; position: absolute; inset: 0; background: url("art/hero.webp") center bottom / cover no-repeat; opacity: .5; }
 .pair-card { position: relative; z-index: 1; border-radius: 1.2rem; padding: 1.4rem; background: rgba(14, 14, 14, .82); border: 1px solid rgba(242, 241, 236, .12); backdrop-filter: blur(12px); box-shadow: 0 1.5rem 3rem rgba(0, 0, 0, .45); }
 .pair-card.small { margin: 1rem 0 0 auto; width: 70%; padding: .9rem 1.1rem; }
 .pair-head, .pair-row { display: flex; align-items: center; gap: .8rem; }
@@ -481,8 +500,9 @@ body.og-mode .nav, body.og-mode main, body.og-mode footer, body.og-mode .badge, 
 body.og-mode .actions, body.og-mode .caption, body.og-mode .steps { display: none; }
 body.og-mode .demo, body.video-mode .demo { animation: none; }
 body.og-mode .hero { padding: 0; }
-body.og-mode .panel { border-radius: 0; background-size: 120% auto; background-position: left center; }
+body.og-mode .panel { border-radius: 0; background-size: 100% auto; background-position: center top; }
 body.og-mode .hero-panel { min-height: 100vh; padding-top: 3.2rem; }
+body.og-mode .hero-panel::before { background: radial-gradient(60% 45% at 50% 28%, rgba(8, 8, 8, .45), transparent 70%); }
 body.og-mode h1 { font-size: 5.4rem; margin: 0; }
 body.og-mode .stage { width: 88vw; padding-top: 1.5rem; }
 

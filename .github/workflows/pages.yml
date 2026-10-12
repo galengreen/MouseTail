@@ -29,8 +29,8 @@ jobs:
       - name: Version the asset links
         run: |
           v=${GITHUB_SHA::8}
-          sed -i -E "s#(href|src)=\"(style\.css|demo\.js|logo\.png|logo-mouse\.svg|favicon\.png|menubar\.svg|art/night\.webp)\"#\1=\"\2?v=$v\"#g" website/index.html
-          sed -i -E "s#url\(\"art/(night[a-z-]*\.webp)\"\)#url(\"art/\1?v=$v\")#g" website/style.css
+          sed -i -E "s#(href|src)=\"(style\.css|demo\.js|logo\.png|logo-mouse\.svg|favicon\.png|menubar\.svg|art/hero\.webp)\"#\1=\"\2?v=$v\"#g" website/index.html
+          sed -i -E "s#url\(\"art/((hero[a-z-]*|cards/[a-z]+)\.webp)\"\)#url(\"art/\1?v=$v\")#g" website/style.css
           grep -c "?v=$v" website/index.html website/style.css
       - uses: actions/upload-pages-artifact@v3
         with:
