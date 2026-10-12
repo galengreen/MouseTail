@@ -1,5 +1,12 @@
 ## What's new
 
+- 0.2.12: MouseTail now works on GNOME (thanks to Ming Bao). It shares this computer's mouse
+  and keyboard through GNOME's input capture, which asks your permission the first time, and
+  adds a MouseTail menu to the top bar on GNOME 50. If you stop the sharing from GNOME,
+  MouseTail says so in its status; restart it to share again.
+
+From 0.2.11:
+
 - 0.2.11: MouseTail now runs on macOS 13 Ventura and later (it needed 14.2 before).
   Everything works there except sending the Mac's own sound to another computer, which
   still needs macOS 14.2.

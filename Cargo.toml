@@ -6,7 +6,7 @@ default-members = ["crates/*"]
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.2.11"
+version = "0.2.12"
 
 [workspace.dependencies]
 anyhow = "1"
