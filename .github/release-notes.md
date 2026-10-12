@@ -1,5 +1,11 @@
 ## What's new
 
+- 0.2.11: MouseTail now runs on macOS 13 Ventura and later (it needed 14.2 before).
+  Everything works there except sending the Mac's own sound to another computer, which
+  still needs macOS 14.2.
+
+From 0.2.10:
+
 - 0.2.10: Sharing sound uses less CPU on Linux. Opus encoding does less work and reuses
   its scratch buffer, and MouseTail avoids copying each audio frame into a new allocation.
   Linux now asks PipeWire for 10 ms callbacks, matching its audio packets. This adds about
