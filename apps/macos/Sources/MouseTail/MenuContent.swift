@@ -38,7 +38,7 @@ struct MenuContent: View {
                 }
                 ActionRow("Arrange Displays…", systemImage: "rectangle.3.group") {
                     openWindow(id: "arrange")
-                    NSApp.activate()
+                    NSApp.bringToFront()
                 }
                 MenuDivider()
                 SectionHeader("Settings")
@@ -74,7 +74,7 @@ struct MenuContent: View {
             MenuDivider()
             if updater.available {
                 ActionRow("Check for Updates…") {
-                    NSApp.activate()
+                    NSApp.bringToFront()
                     updater.checkForUpdates()
                 }
             }
@@ -83,8 +83,7 @@ struct MenuContent: View {
         }
         .padding(10)
         .frame(width: 320)
-        // Otherwise the first control gets a focus ring each time the menu opens.
-        .focusEffectDisabled()
+        .noFocusRing()
     }
 
     private var header: some View {
@@ -337,7 +336,7 @@ struct PairingPanel: View {
                         .font(.system(.title3, design: .monospaced))
                         .frame(width: 90)
                         .onSubmit(submit)
-                        .onChange(of: code) { _, new in
+                        .onChange(of: code) { new in
                             let digits = String(new.filter(\.isNumber).prefix(4))
                             // Tidying it up (a pasted "12-34") runs this again with the digits;
                             // submit then, not twice.
@@ -425,5 +424,19 @@ struct PermissionNotice: View {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)") {
             NSWorkspace.shared.open(url)
         }
+    }
+}
+
+extension NSApplication {
+    func bringToFront() {
+        if #available(macOS 14, *) { activate() } else { activate(ignoringOtherApps: true) }
+    }
+}
+
+private extension View {
+    // Otherwise the first control gets a focus ring each time the menu opens. Ventura has
+    // no way to turn it off, so there it shows.
+    @ViewBuilder func noFocusRing() -> some View {
+        if #available(macOS 14, *) { focusEffectDisabled() } else { self }
     }
 }

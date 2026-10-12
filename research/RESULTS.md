@@ -79,3 +79,5 @@ events, which travel the same MediaRemote path as AirPods).
   Recording permission and mutes the Mac while it taps.
 - **macOS 14.2 minimum**: cpal already links `AudioHardwareDestroyProcessTap` directly (0.2.2's
   daemon included), so the daemon can't load on 14.0/14.1; the app now says 14.2.
+  Later: the daemon weak-links Core Audio (`crates/mousetail/build.rs`), so it loads on
+  Ventura (13) and only sending the Mac's sound needs 14.2.

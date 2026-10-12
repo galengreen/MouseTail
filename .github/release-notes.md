@@ -66,7 +66,7 @@ If you're coming from 0.2.2 or earlier, 0.2.3 brought:
 
 ## Install
 
-**Mac** (macOS 14.2 or later, Apple Silicon or Intel): download `MouseTail-macos.dmg`, drag MouseTail to
+**Mac** (macOS 13 Ventura or later, Apple Silicon or Intel): download `MouseTail-macos.dmg`, drag MouseTail to
 Applications and open it. This build isn't notarised yet, so the first time macOS will refuse
 to open it: go to **System Settings → Privacy & Security** and click **Open Anyway**.
 

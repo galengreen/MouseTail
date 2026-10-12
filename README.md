@@ -46,7 +46,7 @@ Linux → Linux, and each can be both at different times.
 
 | | Main computer (yours moves over) | Controlled (you move onto it) |
 |---|---|---|
-| **macOS 14.2+** | Yes | Yes |
+| **macOS 13 (Ventura)+** | Yes | Yes |
 | **Linux: Hyprland** (incl. [Omarchy](https://omarchy.org)) | Yes | Yes |
 | **Linux: Sway, river, niri and other wlroots desktops** | Yes, untested | Yes, untested |
 | **Linux: KDE Plasma** | Yes, untested | Yes, after `enable-input.sh`, untested |
@@ -55,11 +55,11 @@ Linux → Linux, and each can be both at different times.
 
 Clipboard works everywhere except GNOME (which doesn't let background apps use the
 clipboard yet). Sound goes either way between Macs and Linux (PipeWire); sending a Mac's sound
-needs the System Audio Recording permission.
+needs macOS 14.2 or later and the System Audio Recording permission.
 
 ## Install
 
-**Mac** (macOS 14.2 or later, Apple Silicon or Intel)
+**Mac** (macOS 13 Ventura or later, Apple Silicon or Intel)
 
 1. Download [MouseTail-macos.dmg](https://github.com/galengreen/mousetail/releases/latest/download/MouseTail-macos.dmg)
    and drag MouseTail into Applications.

@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MouseTail",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v13)],
     dependencies: [
         // Updates: https://sparkle-project.org
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0")

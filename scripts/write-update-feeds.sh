@@ -53,7 +53,7 @@ cat > dist/appcast.xml <<XML
       <pubDate>$(LC_ALL=C date -u "+%a, %d %b %Y %H:%M:%S +0000")</pubDate>
       <sparkle:version>$version</sparkle:version>
       <sparkle:shortVersionString>$version</sparkle:shortVersionString>
-      <sparkle:minimumSystemVersion>14.2</sparkle:minimumSystemVersion>
+      <sparkle:minimumSystemVersion>13.0</sparkle:minimumSystemVersion>
       <sparkle:releaseNotesLink>https://github.com/galengreen/MouseTail/releases/tag/$tag</sparkle:releaseNotesLink>
       <enclosure url="$base/MouseTail-macos.zip" length="$(wc -c < "$zip" | tr -d ' ')" type="application/octet-stream" sparkle:edSignature="$signature"/>
     </item>
