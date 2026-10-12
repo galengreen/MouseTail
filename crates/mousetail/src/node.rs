@@ -2327,9 +2327,14 @@ impl Node {
             "name": self.name,
             "port": self.port,
             "pairing_code": pairing_code,
-            "can_control": self.capture.get().is_some(),
+            "can_control": self.capture.get().is_some_and(|c| c.stopped().is_none()),
             "keyboard_blocked": platform::keyboard_blocked(),
-            "capture_error": *self.capture_error.lock().unwrap(),
+            "capture_error": self
+                .capture_error
+                .lock()
+                .unwrap()
+                .clone()
+                .or_else(|| self.capture.get().and_then(|c| c.stopped())),
             "firewall": *self.firewall.lock().unwrap(),
             "can_be_controlled": self.target.get().is_some(),
             "displays": *self.displays.lock().unwrap(),

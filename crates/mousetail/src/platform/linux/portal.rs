@@ -8,13 +8,15 @@
 //! while capture is off, so a new arrangement waits until the cursor is home.
 //!
 //! GNOME asks the person each time MouseTail starts (this version of the portal can't remember
-//! the answer). If they say no, we don't ask again until the next start.
+//! the answer). If they say no, or later stop it from GNOME's own indicator, we don't ask again
+//! until the next start.
 
 use std::collections::{HashMap, HashSet};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, mpsc};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
 use futures_util::StreamExt;
@@ -42,6 +44,18 @@ const CAPABILITIES: u32 = 1 | 2;
 /// Once the person has been asked, why capture can't start this time MouseTail runs: the
 /// retries mustn't put the question up again every couple of seconds.
 static GAVE_UP: OnceLock<String> = OnceLock::new();
+
+/// Why capture stopped after it started, if the person stopped it from the desktop.
+static STOPPED: OnceLock<String> = OnceLock::new();
+
+/// How often the desktop may switch capture off in a row before we stop turning it back on.
+const MAX_REENABLES: u32 = 5;
+const REENABLE_WINDOW: Duration = Duration::from_secs(10);
+
+/// Why capture stopped after it started, for the menu.
+pub(super) fn stopped() -> Option<String> {
+    STOPPED.get().cloned()
+}
 
 type Options<'a> = HashMap<&'a str, Value<'a>>;
 type Results = HashMap<String, OwnedValue>;
@@ -78,15 +92,37 @@ pub(super) fn run(
             }
         };
         let _ = ready.send(Ok(()));
-        if let Err(e) = portal.run(events, cmds, wake).await {
-            tracing::error!("input capture stopped: {e:#}");
-        }
-        // The desktop ended capture (or the portal went away). Nothing can bring the cursor
-        // back or see the edges from here on, so it comes home and MouseTail starts over, as
-        // when it loses layer-shell; GNOME asks again.
+        let ended = portal.run(events, &cmds, wake).await;
         portal.go_home().await;
-        std::process::exit(1);
+        match ended {
+            Ended::Closed => {
+                // The person stopped it from GNOME's indicator. Starting over would put the
+                // question straight back up, so capture stays off until MouseTail next starts
+                // (being controlled carries on).
+                warn!("input capture was stopped from the desktop");
+                let _ = STOPPED.set(
+                    "input capture was stopped from the desktop; restart MouseTail to share \
+                     this computer's mouse again"
+                        .into(),
+                );
+            }
+            Ended::Lost(e) => {
+                // The portal went away (it restarted, say). Nothing can bring the cursor back
+                // or see the edges from here on, so MouseTail starts over, as when it loses
+                // layer-shell; GNOME asks again.
+                tracing::error!("input capture stopped: {e:#}");
+                std::process::exit(1);
+            }
+        }
     });
+}
+
+/// How capture ended.
+enum Ended {
+    /// The desktop closed our session: the person stopped it.
+    Closed,
+    /// The connection to the desktop's input went.
+    Lost(anyhow::Error),
 }
 
 /// A stretch of one of our edges that leads to another computer, in local coordinates.
@@ -144,9 +180,26 @@ struct Portal {
     grabbed: bool,
     /// Where the pointer is held meanwhile.
     held_at: Point,
+    /// That's on the barrier itself (a left or top one), so moving off it sets it off again.
+    held_on_barrier: bool,
     /// Where the desktop last ended a capture itself, leaving the pointer on the barrier.
     left_on: Option<Point>,
+    /// Buttons pressed since the capture began.
     buttons: HashSet<u16>,
+    scroll: PendingScroll,
+    /// When the desktop has been switching capture off, to stop turning it back on if it
+    /// keeps doing it.
+    reenabled: Vec<Instant>,
+}
+
+/// Scrolling in one frame: libei can send both the smooth amount and whole notches for the
+/// same turn of the wheel.
+#[derive(Default)]
+struct PendingScroll {
+    dx: f64,
+    dy: f64,
+    v120: (i32, i32),
+    any: bool,
 }
 
 impl Portal {
@@ -207,18 +260,33 @@ impl Portal {
             active: None,
             grabbed: false,
             held_at: Point::default(),
+            held_on_barrier: false,
             left_on: None,
             buttons: HashSet::new(),
+            scroll: PendingScroll::default(),
+            reenabled: vec![],
         };
         Ok((portal, events))
     }
 
     async fn run(
         &mut self,
-        mut events: EiConvertEventStream,
-        cmds: mpsc::Receiver<Cmd>,
+        events: EiConvertEventStream,
+        cmds: &mpsc::Receiver<Cmd>,
         wake: OwnedFd,
-    ) -> anyhow::Result<()> {
+    ) -> Ended {
+        match self.watch(events, cmds, wake).await {
+            Ok(ended) => ended,
+            Err(e) => Ended::Lost(e),
+        }
+    }
+
+    async fn watch(
+        &mut self,
+        mut events: EiConvertEventStream,
+        cmds: &mpsc::Receiver<Cmd>,
+        wake: OwnedFd,
+    ) -> anyhow::Result<Ended> {
         let wake = AsyncFd::new(wake)?;
         let mut activated = self.portal.receive_signal("Activated").await?;
         let mut deactivated = self.portal.receive_signal("Deactivated").await?;
@@ -234,10 +302,21 @@ impl Portal {
         let mut closed = session.receive_signal("Closed").await?;
         loop {
             tokio::select! {
-                event = events.next() => match event {
-                    Some(event) => self.on_ei(event.context("input from the desktop")?).await?,
-                    None => bail!("the desktop closed the input connection"),
-                },
+                event = events.next() => {
+                    let lost = match event {
+                        Some(Ok(event)) => self.on_ei(event).await.err(),
+                        Some(Err(e)) => Some(anyhow::Error::from(e).context("input from the desktop")),
+                        None => Some(anyhow!("the desktop closed the input connection")),
+                    };
+                    if let Some(e) = lost {
+                        // Closing the session drops the connection too, perhaps first.
+                        let closing = tokio::time::timeout(Duration::from_millis(500), closed.next());
+                        return Ok(match closing.await {
+                            Ok(Some(_)) => Ended::Closed,
+                            _ => Ended::Lost(e),
+                        });
+                    }
+                }
                 Some(m) = activated.next() => if let Some(o) = self.ours(&m) {
                     self.activated(o).await
                 },
@@ -250,10 +329,13 @@ impl Portal {
                     self.stale = true;
                     self.rearm().await
                 },
+                // Its escape shortcut, say: that only lets the pointer go, so the barriers go
+                // back on.
                 Some(m) = disabled.next() => if self.ours(&m).is_some() {
-                    self.desktop_ended().await
+                    self.desktop_ended().await;
+                    self.reenable().await
                 },
-                Some(_) = closed.next() => bail!("the desktop ended input capture"),
+                Some(_) = closed.next() => return Ok(Ended::Closed),
                 ready = wake.readable() => {
                     let mut ready = ready?;
                     let mut buf = [0u8; 64];
@@ -281,7 +363,9 @@ impl Portal {
             // Grabs follow crossings, which happen here; and the portal can't choose the
             // pointer's image.
             Cmd::Apply(_) | Cmd::HideCursor => {}
-            // The barriers follow the arrangement those edges came from.
+            // Those are whole sides of displays (what layer-shell's strips need); barriers go
+            // only along the stretches that lead somewhere, so they come from the arrangement
+            // those sides came from.
             Cmd::Edges(_) => self.rearm().await,
         }
     }
@@ -298,7 +382,7 @@ impl Portal {
             .layout()
             .exit_edges(0)
             .into_iter()
-            .map(|(_, side, from, to)| Barrier { side, from, to })
+            .map(|(side, from, to)| Barrier { side, from, to })
             .collect()
     }
 
@@ -359,6 +443,20 @@ impl Portal {
         Ok(())
     }
 
+    /// Arm the barriers again after the desktop switched capture off, unless it keeps doing
+    /// that.
+    async fn reenable(&mut self) {
+        let now = Instant::now();
+        self.reenabled
+            .retain(|t| now.duration_since(*t) < REENABLE_WINDOW);
+        if self.reenabled.len() as u32 >= MAX_REENABLES {
+            warn!("the desktop keeps switching input capture off; leaving it off for now");
+            return;
+        }
+        self.reenabled.push(now);
+        self.enable().await;
+    }
+
     /// Arm the barriers again (it fails harmlessly if they're armed already).
     async fn enable(&self) {
         if self.barriers.is_empty() {
@@ -379,6 +477,7 @@ impl Portal {
         debug!("capture {id:?} at {at:?} through barrier {barrier:?}");
         self.active = Some(id.unwrap_or_default());
         self.buttons.clear();
+        self.scroll = PendingScroll::default();
         let barrier = barrier
             .and_then(|b| self.barriers.get((b as usize).checked_sub(1)?))
             .or_else(|| {
@@ -398,6 +497,9 @@ impl Portal {
             return self.release(Some(at)).await;
         }
         self.held_at = at;
+        self.held_on_barrier = matches!(barrier.side, Side::Left | Side::Above);
+        // The portal can't say whether a button was already held (a drag reaching the edge);
+        // that only shows when it's let go (see `on_ei`).
         self.feed(Input::Motion {
             at,
             dx,
@@ -422,15 +524,16 @@ impl Portal {
         // barriers go back on if that turned them off.
         debug!("the desktop ended capture {id:?}");
         self.desktop_ended().await;
+        self.enable().await;
     }
 
     async fn desktop_ended(&mut self) {
-        if self.active.take().is_some() {
-            // It leaves the pointer where it held it, on the barrier.
+        // It leaves the pointer where it held it. On a left or top barrier, that's on the
+        // barrier, which moving off sets off again; on a right or bottom one it's clear.
+        if self.active.take().is_some() && self.held_on_barrier {
             self.left_on = Some(self.held_at);
         }
         self.go_home().await;
-        self.enable().await;
     }
 
     /// Let the pointer go, at `warp` (where the controller says it came home).
@@ -513,29 +616,29 @@ impl Portal {
                 let (code, down) = (e.button as u16, e.state == ButtonState::Press);
                 if down {
                     self.buttons.insert(code);
-                } else {
-                    self.buttons.remove(&code);
+                } else if !self.buttons.remove(&code) && ev::is_button(code) {
+                    // Let go of a button pressed before the capture: a drag that reached the
+                    // edge, which stays here, as everywhere else. The cursor comes home.
+                    debug!("a drag reached the edge; the cursor comes home");
+                    self.go_home().await;
+                    return Ok(());
                 }
                 self.feed(Input::Button { code, down }).await;
             }
-            // Wheels come in whole notches of 120; trackpads smoothly.
-            EiEvent::ScrollDiscrete(e) => {
-                let (x, y) = (e.discrete_dx, e.discrete_dy);
-                let notches = (x % 120 == 0 && y % 120 == 0).then_some((x / 120, y / 120));
-                self.feed(Input::Scroll(Scroll {
-                    dx: x as f64 / 8.0,
-                    dy: y as f64 / 8.0,
-                    notches,
-                }))
-                .await;
-            }
             EiEvent::ScrollDelta(e) => {
-                self.feed(Input::Scroll(Scroll {
-                    dx: e.dx.into(),
-                    dy: e.dy.into(),
-                    notches: None,
-                }))
-                .await;
+                self.scroll.any = true;
+                self.scroll.dx += f64::from(e.dx);
+                self.scroll.dy += f64::from(e.dy);
+            }
+            EiEvent::ScrollDiscrete(e) => {
+                self.scroll.any = true;
+                self.scroll.v120.0 += e.discrete_dx;
+                self.scroll.v120.1 += e.discrete_dy;
+            }
+            EiEvent::Frame(_) => {
+                if let Some(scroll) = std::mem::take(&mut self.scroll).finish() {
+                    self.feed(Input::Scroll(scroll)).await;
+                }
             }
             EiEvent::KeyboardKey(e) => {
                 let down = e.state == KeyState::Press;
@@ -596,6 +699,27 @@ where
         .context("the desktop portal went away")?;
     let (code, results): (u32, Results) = answer.body().deserialize()?;
     Ok(if code == 0 { Ok(results) } else { Err(code) })
+}
+
+impl PendingScroll {
+    /// One scroll for the frame, as the layer-shell capture sends it.
+    fn finish(self) -> Option<Scroll> {
+        if !self.any {
+            return None;
+        }
+        let (x, y) = self.v120;
+        // Whole notches from a notched wheel. High-resolution wheels send fractions of a
+        // notch, which go as smooth scrolling (dividing would make them 0).
+        let notches =
+            ((x, y) != (0, 0) && x % 120 == 0 && y % 120 == 0).then_some((x / 120, y / 120));
+        // Notches alone (no smooth amount with them): libinput's 15 points a notch.
+        let (dx, dy) = if self.dx == 0.0 && self.dy == 0.0 {
+            (f64::from(x) / 8.0, f64::from(y) / 8.0)
+        } else {
+            (self.dx, self.dy)
+        };
+        Some(Scroll { dx, dy, notches })
+    }
 }
 
 /// `p`, moved off any left or top barrier it's on. The desktop puts the pointer back on a
@@ -688,6 +812,45 @@ mod tests {
         };
         let (at, dx, dy) = above.crossing(Point::new(700.0, -6.0));
         assert_eq!((at, dx, dy), (Point::new(700.0, 0.0), 0.0, -1.0));
+    }
+
+    #[test]
+    fn one_wheel_notch_is_one_scroll() {
+        let both = PendingScroll {
+            dy: 15.0,
+            v120: (0, 120),
+            any: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            both.finish(),
+            Some(Scroll {
+                dx: 0.0,
+                dy: 15.0,
+                notches: Some((0, 1)),
+            })
+        );
+        let notch_only = PendingScroll {
+            v120: (0, -120),
+            any: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            notch_only.finish(),
+            Some(Scroll {
+                dx: 0.0,
+                dy: -15.0,
+                notches: Some((0, -1)),
+            })
+        );
+        let smooth = PendingScroll {
+            dx: 2.5,
+            v120: (30, 0),
+            any: true,
+            ..Default::default()
+        };
+        assert_eq!(smooth.finish().and_then(|s| s.notches), None);
+        assert_eq!(PendingScroll::default().finish(), None);
     }
 
     #[test]

@@ -316,22 +316,28 @@ impl Layout {
     /// the arrangement view. Each is (start, end) in layout coordinates.
     pub fn crossing_edges(&self) -> Vec<(Point, Point)> {
         let edges = self.edges_where(|from, to| from != to);
-        edges.into_iter().map(|(_, _, a, b)| (a, b)).collect()
+        edges
+            .into_iter()
+            .map(|(.., start, end)| (start, end))
+            .collect()
     }
 
     /// Stretches of machine `a`'s display edges that lead to machine `b`.
     pub fn edges_between(&self, a: usize, b: usize) -> Vec<(Point, Point)> {
         let edges = self.edges_where(|from, to| from == a && to == b);
-        edges.into_iter().map(|(_, _, a, b)| (a, b)).collect()
+        edges
+            .into_iter()
+            .map(|(.., start, end)| (start, end))
+            .collect()
     }
 
-    /// Stretches of `machine`'s display edges that lead to another computer, with the display
-    /// (its index) and side each is on: where a capture backend that sets barriers puts them.
-    pub fn exit_edges(&self, machine: usize) -> Vec<(usize, Side, Point, Point)> {
+    /// Stretches of `machine`'s display edges that lead to another computer, with the side
+    /// each is on: where a capture backend that sets barriers puts them.
+    pub fn exit_edges(&self, machine: usize) -> Vec<(Side, Point, Point)> {
         let edges = self.edges_where(|from, to| from == machine && to != machine);
         edges
             .into_iter()
-            .map(|(d, side, a, b)| (d.display, side, a, b))
+            .map(|(_, side, start, end)| (side, start, end))
             .collect()
     }
 
@@ -658,14 +664,13 @@ mod tests {
     }
 
     #[test]
-    fn exit_edges_say_which_display_and_side() {
+    fn exit_edges_say_which_side() {
         let l = real_desk();
         assert_eq!(
             l.exit_edges(0),
             vec![
-                (0, Side::Left, Point::new(0.0, 0.0), Point::new(0.0, 596.0)),
+                (Side::Left, Point::new(0.0, 0.0), Point::new(0.0, 596.0)),
                 (
-                    1,
                     Side::Left,
                     Point::new(-587.0, -484.0),
                     Point::new(-587.0, 0.0)
@@ -676,7 +681,6 @@ mod tests {
         assert_eq!(
             l.exit_edges(1),
             vec![(
-                0,
                 Side::Right,
                 Point::new(-587.0, -484.0),
                 Point::new(-587.0, 596.0)

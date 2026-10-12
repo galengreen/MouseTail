@@ -132,6 +132,15 @@ gnome_supported=$(grep -so '"shell-version": *\[[^]]*' "$gnome_src/metadata.json
 if on_gnome && [[ -n $gnome_version && -n $gnome_supported && /$gnome_supported/ != */$gnome_version/* ]]; then
   echo
   echo "MouseTail's top-bar menu needs GNOME $gnome_supported (this is GNOME $gnome_version), so it isn't added."
+  # One added under an earlier GNOME won't load now, and updates would keep replacing it.
+  if [[ -d $gnome_extensions/$gnome_uuid ]]; then
+    gnome-extensions disable "$gnome_uuid" 2>/dev/null || gjs -c "
+      const {Gio} = imports.gi;
+      const shell = new Gio.Settings({schema_id: 'org.gnome.shell'});
+      shell.set_strv('enabled-extensions', shell.get_strv('enabled-extensions').filter(u => u !== '$gnome_uuid'));
+      Gio.Settings.sync();" 2>/dev/null || true
+    rm -rf "${gnome_extensions:?}/$gnome_uuid"
+  fi
 elif on_gnome && [[ -d $gnome_src ]]; then
   say "Adding MouseTail to GNOME's top bar"
   rm -rf "${gnome_extensions:?}/$gnome_uuid"

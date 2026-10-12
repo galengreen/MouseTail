@@ -97,9 +97,14 @@ impl Capture {
                         std::process::exit(1);
                     }
                 }
-                Err(e) => {
-                    debug!("no layer-shell capture ({e:#}), so the desktop portal");
+                // Only where there's no layer-shell at all: anything else going wrong (the
+                // compositor not up yet, say) is worth saying, and retrying.
+                Err(e) if e.is::<NoLayerShell>() => {
+                    debug!("no layer-shell, so the desktop portal");
                     super::portal::run(controller, actions, rx, wake_rx, ready_tx);
+                }
+                Err(e) => {
+                    let _ = ready_tx.send(Err(e));
                 }
             })?;
         ready_rx.recv().context("capture thread died")??;
@@ -126,6 +131,11 @@ impl Capture {
     pub fn set_edges(&self, edges: Vec<Edge>) {
         self.send(Cmd::Edges(edges));
     }
+
+    /// Why capture has stopped since it started, if it has (stopped from GNOME's indicator).
+    pub fn stopped(&self) -> Option<String> {
+        super::portal::stopped()
+    }
 }
 
 /// A monitor, followed as it comes and goes. Its position comes with each `Edge` (from the
@@ -151,6 +161,18 @@ struct Grab {
     locked: ZwpLockedPointerV1,
     inhibitor: Option<ZwpKeyboardShortcutsInhibitorV1>,
 }
+
+/// The compositor has no `wlr-layer-shell` (GNOME): capture goes through the portal instead.
+#[derive(Debug)]
+struct NoLayerShell;
+
+impl std::fmt::Display for NoLayerShell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("this desktop doesn't support wlr-layer-shell")
+    }
+}
+
+impl std::error::Error for NoLayerShell {}
 
 #[derive(Default)]
 struct PendingScroll {
@@ -223,10 +245,7 @@ impl Grabber {
         let compositor = g.compositor.clone().context("no wl_compositor")?;
         let shm = g.shm.clone().context("no wl_shm")?;
         let seat = g.seat.clone().context("no wl_seat")?;
-        let layer_shell = g
-            .layer_shell
-            .clone()
-            .with_context(|| need("wlr-layer-shell"))?;
+        let layer_shell = g.layer_shell.clone().ok_or(NoLayerShell)?;
         let constraints = g
             .constraints
             .clone()

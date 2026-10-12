@@ -219,6 +219,11 @@ impl Capture {
     pub fn apply(&self, action: &Action) {
         apply(action);
     }
+
+    /// The tap carries on until MouseTail quits.
+    pub fn stopped(&self) -> Option<String> {
+        None
+    }
 }
 
 fn ensure_permissions(prompt: bool) -> anyhow::Result<()> {

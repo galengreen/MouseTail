@@ -171,14 +171,23 @@ impl Uinput {
     }
 }
 
-/// Where `v` points along a desktop `len` points wide lands on an absolute axis: the middle of
-/// its pixel. Exactly on a screen's edge is where GNOME puts the barriers that tell this
-/// computer's own mouse is pushing off it (see `portal`), and one landing there sets them off.
+/// Where `v` points along a desktop `len` points wide lands on an absolute axis. Exactly on a
+/// pixel's edge is where GNOME puts the barriers that tell this computer's own mouse is pushing
+/// off a screen (see `portal`), and one landing there sets them off; so a position that close
+/// to a whole pixel moves a quarter of a pixel in, and anything else keeps its fraction (with
+/// fractional scaling, slow movement goes in steps smaller than a pixel).
 /// The desktop reads the axis back as `value * len / (RANGE + 1)`.
 fn axis(v: f64, len: f64) -> i32 {
+    const CLEAR: f64 = 0.25;
     let len = len.max(1.0);
-    let pixel = v.clamp(0.0, len - 1.0).floor();
-    ((pixel + 0.5) / len * (RANGE + 1) as f64) as i32
+    let v = v.clamp(0.0, len - CLEAR);
+    let whole = v.round();
+    let v = if (v - whole).abs() < CLEAR {
+        whole + CLEAR
+    } else {
+        v
+    };
+    (v / len * (RANGE + 1) as f64) as i32
 }
 
 #[cfg(test)]
@@ -186,7 +195,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn positions_land_inside_pixels_never_on_an_edge() {
+    fn positions_never_land_on_a_pixel_edge() {
         let read_back = |value: i32, len: f64| value as f64 * len / (RANGE + 1) as f64;
         for len in [1080.0, 1920.0, 3760.0, 5120.0] {
             for v in [
@@ -200,12 +209,19 @@ mod tests {
                 len + 3.0,
             ] {
                 let p = read_back(axis(v, len), len);
-                let pixel = v.clamp(0.0, len - 1.0).floor();
-                assert!(
-                    p > pixel + 0.25 && p < pixel + 0.75,
-                    "{v} on {len}: read back as {p}"
-                );
+                let off = (p - p.round()).abs();
+                assert!(off > 0.15, "{v} on {len}: read back as {p}");
+                assert!((0.0..len).contains(&p), "{v} on {len}: read back as {p}");
             }
+        }
+    }
+
+    #[test]
+    fn positions_between_pixels_keep_their_fraction() {
+        let read_back = |value: i32, len: f64| value as f64 * len / (RANGE + 1) as f64;
+        for v in [10.5, 10.4, 1051.625, 2000.7] {
+            let p = read_back(axis(v, 3760.0), 3760.0);
+            assert!((p - v).abs() < 0.1, "{v} read back as {p}");
         }
     }
 }

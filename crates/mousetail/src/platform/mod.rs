@@ -159,6 +159,10 @@ mod stubs {
         pub fn set_edges(&self, _edges: Vec<super::Edge>) {}
 
         pub fn hide_cursor(&self) {}
+
+        pub fn stopped(&self) -> Option<String> {
+            None
+        }
     }
 
     /// Plays another machine's sound here.
