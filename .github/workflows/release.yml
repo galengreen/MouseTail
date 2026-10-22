@@ -21,7 +21,7 @@ jobs:
         run: |
           echo "releases come from a tag or main, not $GITHUB_REF_NAME"
           exit 1
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: The tag matches Cargo.toml's version
         if: github.ref_type == 'tag'
         run: |
@@ -35,12 +35,12 @@ jobs:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y libpipewire-0.3-dev libopus-dev libxkbcommon-dev clang pkg-config
       - run: scripts/package-linux.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.runner }}
           path: dist/*.tar.gz
@@ -49,8 +49,8 @@ jobs:
     needs: check
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
       # Sign with the same certificate every time, so macOS keeps MouseTail's permissions
@@ -72,7 +72,7 @@ jobs:
       - run: scripts/package-mac.sh
       - name: The app is signed with the release certificate
         run: codesign -dr - dist/MouseTail.app 2>&1 | grep -q 'certificate leaf = H"bbedfafe07206a1e8e8362c1b56dcfdee72d35c6"'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: macos
           path: |
@@ -85,8 +85,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
           merge-multiple: true
