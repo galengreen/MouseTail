@@ -32,10 +32,12 @@
   whatever it's using, AirPods included: push the cursor from your Mac onto Linux and Linux's
   sound comes to the Mac; push from Linux onto the Mac and the Mac's sound goes to Linux.
   Pressing your AirPods or the play/pause and skip keys controls whatever is playing.
-- **Shortcuts feel right.** From a Mac to Linux, ⌘Tab, ⌘Space, ⌘Return, ⌘arrows and ⌘numbers
-  go to the desktop as Super, ⌘C/⌘V/⌘X use Omarchy's universal copy and paste where it has it,
-  and everything else (⌘T, ⌘F, ⌘W…) becomes Ctrl. From Linux to a Mac, Super is ⌘ and Alt is
-  Option, where those keys sit.
+- **Shortcuts feel right.** From a Mac to Linux, ⌘ works like a Mac keyboard plugged in: every
+  Super shortcut on the desktop gets Super (on Omarchy ⌘W closes the window, ⌘C/⌘V/⌘X are
+  universal copy and paste, ⌘Space is the menu), and ⌘Tab, ⌘Space, ⌘Return, ⌘arrows and
+  ⌘numbers always do. ⌘ plus anything else (⌘A, ⌘Z, ⌘N…) becomes Ctrl for the app. You can
+  choose for yourself, key by key, with `command_keys`. From Linux to a Mac, Super is ⌘ and
+  Alt is Option, where those keys sit.
 - **Wakes things up.** Moving onto a blanked or locked screen turns it on; pushing towards a
   sleeping computer sends it a Wake-on-LAN packet.
 - **Nothing to configure.** Computers find each other on your network, pair once with a

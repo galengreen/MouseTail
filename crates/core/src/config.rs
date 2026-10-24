@@ -1,6 +1,7 @@
 //! Persistent settings and paired peers. Everything has a sensible default; the file only
 //! exists so people can dig in if they want to.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::net::SocketAddr;
@@ -52,6 +53,11 @@ pub struct Settings {
     pub updates: bool,
     /// A ripple where the cursor crosses to or from another computer.
     pub ripple: bool,
+    /// What ⌘ plus a key becomes when a Mac controls this computer, overriding the
+    /// automatic choice: key name (as in Hyprland, `F`, `RETURN`…) to `"ctrl"` or `"super"`.
+    /// By default it's Super wherever the desktop has a Super shortcut, Ctrl elsewhere.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub command_keys: BTreeMap<String, String>,
 }
 
 impl Settings {
@@ -71,6 +77,7 @@ impl Default for Settings {
             audio: true,
             updates: true,
             ripple: true,
+            command_keys: BTreeMap::new(),
         }
     }
 }

@@ -183,9 +183,13 @@ at the Omarchy lock screen):
 - Send **physical key positions** (mapped macOS virtual keycode → Linux evdev code). The target
   applies its own keyboard layout, so both machines should use the same layout.
 - Modifier mapping (default, configurable):
-  - `Cmd` → `Ctrl` so Cmd+C / Cmd+V / Cmd+T etc. behave as expected on Linux.
-  - Exceptions stay `Super` for Hyprland: Cmd+Tab, Cmd+Space, Cmd+Return, Cmd+number,
-    Cmd+arrows, and Cmd on its own. The exception list is editable.
+  - `Cmd` → `Super` wherever the desktop binds that Super shortcut with the same Shift/Ctrl/Alt
+    held (read from `hyprctl binds` each time a Mac's cursor arrives), as if a Mac keyboard
+    were plugged in: Omarchy's Super+W closes the window, Super+C/V/X are universal clipboard.
+  - Cmd+Tab, Cmd+Space, Cmd+Return, Cmd+number and Cmd+arrows are always `Super`.
+  - Everything else is `Ctrl`, so Cmd+A / Cmd+Z / Cmd+N reach the app. Cmd on its own sends
+    nothing.
+  - `[settings.command_keys]` overrides it per key, e.g. `F = "ctrl"` to keep Cmd+F as find.
   - `Ctrl` → `Ctrl`; `Opt` → `Alt`.
 - On leaving the remote (or disconnecting) all pressed keys and buttons are released, so nothing
   gets stuck.

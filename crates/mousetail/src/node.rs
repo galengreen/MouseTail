@@ -17,7 +17,7 @@ use mousetail_core::config::{Config, PeerConfig};
 use mousetail_core::controller::{Action, Controller};
 use mousetail_core::discovery::{self, Found};
 use mousetail_core::identity::{Identity, id_from_fingerprint};
-use mousetail_core::keys::{CommandRemap, ev};
+use mousetail_core::keys::{CommandKeys, CommandRemap, ev};
 use mousetail_core::layout::{Point, Rect, Side};
 use mousetail_core::net;
 use mousetail_core::net::Endpoints;
@@ -436,7 +436,7 @@ impl Node {
                 Ok(emulator) => {
                     let _ = self.target.set(Mutex::new(Target {
                         emulator,
-                        remap: CommandRemap::new(platform::command_super_keys()),
+                        remap: CommandRemap::new(platform::command_keys()),
                         active: None,
                         remap_active: false,
                         last_seq: 0,
@@ -1495,6 +1495,11 @@ impl Node {
 
     fn on_input(&self, id: &str, peer: &Peer, msg: Message) {
         let Some(t) = self.target.get() else { return };
+        let remap_active =
+            peer.hello.platform == Platform::MacOs && Platform::current() != Platform::MacOs;
+        // Read the desktop's shortcuts afresh each time a Mac arrives, so edits to them count.
+        let command_keys =
+            (remap_active && matches!(msg, Message::Enter { .. })).then(|| self.command_keys());
         let mut t = t.lock().unwrap();
         match msg {
             Message::Enter { x, y } => {
@@ -1503,8 +1508,10 @@ impl Node {
                 }
                 t.active = Some(id.to_string());
                 self.entered.notify_waiters();
-                t.remap_active = peer.hello.platform == Platform::MacOs
-                    && Platform::current() != Platform::MacOs;
+                t.remap_active = remap_active;
+                if let Some(keys) = command_keys {
+                    t.remap.keys = keys;
+                }
                 if t.seq_from.as_deref() != Some(id) {
                     t.seq_from = Some(id.to_string());
                     t.last_seq = 0;
@@ -2679,6 +2686,19 @@ impl Node {
     pub fn release(&self) {
         let actions = self.controller.lock().unwrap().release();
         self.apply_actions(actions);
+    }
+
+    /// What ⌘ becomes here: the desktop's shortcuts, then the `command_keys` setting.
+    fn command_keys(&self) -> CommandKeys {
+        let mut keys = platform::command_keys();
+        let bad = keys.apply_overrides(&self.config.lock().unwrap().settings.command_keys);
+        if !bad.is_empty() {
+            warn!(
+                "ignoring command_keys {} (want a key name = \"ctrl\" or \"super\")",
+                bad.join(", ")
+            );
+        }
+        keys
     }
 
     /// Stop the daemon (cleanly, as for a signal).

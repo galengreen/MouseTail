@@ -9,9 +9,6 @@
 //! Platforms without a backend get stubs whose `start` fails, which simply means that machine
 //! can't take that role yet.
 
-#[cfg(not(target_os = "linux"))]
-use std::collections::HashSet;
-
 /// An edge of one of this machine's displays that leads to another computer (capture
 /// backends that can't watch the whole screen use these).
 #[derive(Clone, Debug, PartialEq)]
@@ -46,8 +43,7 @@ pub use macos_emulate::{Emulator, on_enter};
 mod linux;
 #[cfg(target_os = "linux")]
 pub use linux::{
-    Emulator, clipboard_get, clipboard_set, command_super_keys, displays, notify, on_enter,
-    wake_macs,
+    Emulator, clipboard_get, clipboard_set, command_keys, displays, notify, on_enter, wake_macs,
 };
 
 #[cfg(target_os = "linux")]
@@ -98,8 +94,11 @@ pub use stubs::Ripples;
 
 /// Keys that Command should turn into Super on this machine (see `keys::CommandRemap`).
 #[cfg(not(target_os = "linux"))]
-pub fn command_super_keys() -> HashSet<u16> {
-    mousetail_core::keys::CommandRemap::default_super_keys()
+pub fn command_keys() -> mousetail_core::keys::CommandKeys {
+    mousetail_core::keys::CommandKeys {
+        super_keys: mousetail_core::keys::CommandRemap::default_super_keys(),
+        ..Default::default()
+    }
 }
 
 /// Is the OS withholding keystrokes from us (e.g. macOS Secure Input)?

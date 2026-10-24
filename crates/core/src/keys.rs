@@ -200,31 +200,153 @@ pub fn evdev_to_mac(code: u16) -> Option<u16> {
     table.get(&code).copied()
 }
 
+/// evdev code for a key as Hyprland names it in a binding: an xkb key name (`W`, `RETURN`,
+/// `comma`, `BracketLeft`; any case) or `code:N` (an xkb keycode). Positions on a US layout,
+/// as everywhere else here. `None` for names with no fixed key (mouse buttons, `XF86…`).
+pub fn evdev_from_name(name: &str) -> Option<u16> {
+    let lower = name.trim().to_ascii_lowercase();
+    if let Some(code) = lower.strip_prefix("code:") {
+        return code.parse::<u16>().ok()?.checked_sub(8).filter(|&c| c > 0);
+    }
+    if let [c] = lower.as_bytes() {
+        const LETTERS: [u16; 26] = [
+            30, 48, 46, 32, 18, 33, 34, 35, 23, 36, 37, 38, 50, 49, 24, 25, 16, 19, 31, 20, 22, 47,
+            17, 45, 21, 44,
+        ];
+        return match c {
+            b'a'..=b'z' => Some(LETTERS[(c - b'a') as usize]),
+            b'1'..=b'9' => Some((c - b'1') as u16 + 2),
+            b'0' => Some(11),
+            _ => None,
+        };
+    }
+    if let Some(n) = lower.strip_prefix('f').and_then(|n| n.parse::<u16>().ok()) {
+        return match n {
+            1..=10 => Some(58 + n),
+            11 | 12 => Some(76 + n),
+            13..=24 => Some(170 + n),
+            _ => None,
+        };
+    }
+    Some(match lower.as_str() {
+        "escape" | "esc" => ev::ESC,
+        "minus" => 12,
+        "equal" => 13,
+        "backspace" => ev::BACKSPACE,
+        "tab" => ev::TAB,
+        "bracketleft" => 26,
+        "bracketright" => 27,
+        "return" | "enter" => ev::ENTER,
+        "semicolon" => 39,
+        "apostrophe" => 40,
+        "grave" => 41,
+        "backslash" => 43,
+        "comma" => 51,
+        "period" => 52,
+        "slash" => 53,
+        "space" => ev::SPACE,
+        "print" => 99,
+        "home" => 102,
+        "up" => ev::UP,
+        "prior" | "page_up" => 104,
+        "left" => ev::LEFT,
+        "right" => ev::RIGHT,
+        "end" => 107,
+        "down" => ev::DOWN,
+        "next" | "page_down" => 109,
+        "insert" => 110,
+        "delete" => 111,
+        _ => return None,
+    })
+}
+
+/// Modifiers other than Command, as bits in the same places as Hyprland's `modmask`.
+pub mod mods {
+    pub const SHIFT: u8 = 1;
+    pub const CTRL: u8 = 4;
+    pub const ALT: u8 = 8;
+}
+
+/// The modifier bit for a Shift, Ctrl or Alt key; 0 for anything else.
+fn mod_bit(code: u16) -> u8 {
+    match code {
+        ev::LEFTSHIFT | ev::RIGHTSHIFT => mods::SHIFT,
+        ev::LEFTCTRL | ev::RIGHTCTRL => mods::CTRL,
+        ev::LEFTALT | ev::RIGHTALT => mods::ALT,
+        _ => 0,
+    }
+}
+
 /// What Command (the Mac's ⌘, sent as evdev META) becomes on a non-Mac target.
 ///
-/// Command is held back until the next key or click decides it: keys in `super_keys` get
-/// Super (desktop/window-manager shortcuts), everything else gets Ctrl (app shortcuts), so
-/// Mac muscle memory works on both levels.
+/// Command is held back until the next key or click decides it. It becomes Super where the
+/// desktop has a Super shortcut for that key with the same other modifiers held (so ⌘W is
+/// Omarchy's Super+W, close window, just as with a Mac keyboard plugged in), or where a key
+/// is in `super_keys`; everything else gets Ctrl (app shortcuts: ⌘A, ⌘Z, ⌘N…).
+#[derive(Clone, Debug, Default)]
+pub struct CommandKeys {
+    /// Super with any other modifiers.
+    pub super_keys: HashSet<u16>,
+    /// Super with exactly these other modifiers (`mods` bits): the desktop's own shortcuts.
+    pub super_combos: HashSet<(u16, u8)>,
+    /// Always Ctrl, whatever the desktop binds: for people who'd rather ⌘F found than went
+    /// full screen.
+    pub ctrl_keys: HashSet<u16>,
+}
+
+impl CommandKeys {
+    /// Apply the `command_keys` setting (key name → `"ctrl"` or `"super"`). Returns the
+    /// entries it couldn't make sense of.
+    pub fn apply_overrides<'a>(
+        &mut self,
+        overrides: impl IntoIterator<Item = (&'a String, &'a String)>,
+    ) -> Vec<String> {
+        let mut bad = vec![];
+        for (name, to) in overrides {
+            match (evdev_from_name(name), to.to_ascii_lowercase().as_str()) {
+                (Some(code), "ctrl") => {
+                    self.super_keys.remove(&code);
+                    self.ctrl_keys.insert(code);
+                }
+                (Some(code), "super") => {
+                    self.ctrl_keys.remove(&code);
+                    self.super_keys.insert(code);
+                }
+                _ => bad.push(format!("{name} = {to:?}")),
+            }
+        }
+        bad
+    }
+
+    fn wants_super(&self, code: u16, mods: u8) -> bool {
+        !self.ctrl_keys.contains(&code)
+            && (self.super_keys.contains(&code) || self.super_combos.contains(&(code, mods)))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct CommandRemap {
-    pub super_keys: HashSet<u16>,
+    pub keys: CommandKeys,
     /// Command + click: Super (window move/resize in tiling WMs) when true, else Ctrl.
     pub super_for_buttons: bool,
     held: HashSet<u16>,
+    /// Shift, Ctrl and Alt keys held, whose `mods` bits pick the desktop shortcut.
+    mods_held: HashSet<u16>,
     emitted: Option<u16>,
 }
 
 impl CommandRemap {
-    pub fn new(super_keys: HashSet<u16>) -> Self {
+    pub fn new(keys: CommandKeys) -> Self {
         Self {
-            super_keys,
+            keys,
             super_for_buttons: true,
             held: HashSet::new(),
+            mods_held: HashSet::new(),
             emitted: None,
         }
     }
 
-    /// Desktop-level shortcuts that stay on Super by default.
+    /// Desktop-level shortcuts that stay on Super by default, wherever MouseTail runs.
     pub fn default_super_keys() -> HashSet<u16> {
         let mut keys: HashSet<u16> = [ev::TAB, ev::SPACE, ev::ENTER, ev::ESC]
             .into_iter()
@@ -252,13 +374,23 @@ impl CommandRemap {
             }
             return vec![];
         }
-        if self.held.is_empty() || !down {
+        let bit = mod_bit(code);
+        if bit != 0 {
+            if down {
+                self.mods_held.insert(code);
+            } else {
+                self.mods_held.remove(&code);
+            }
+        }
+        // Shift, Ctrl and Alt don't decide Command: the key pressed with them does.
+        if self.held.is_empty() || !down || bit != 0 {
             return vec![(code, down)];
         }
         let wants_super = if ev::is_button(code) {
             self.super_for_buttons
         } else {
-            self.super_keys.contains(&code)
+            let mods = self.mods_held.iter().fold(0, |m, &c| m | mod_bit(c));
+            self.keys.wants_super(code, mods)
         };
         let want = if wants_super {
             ev::LEFTMETA
@@ -279,6 +411,7 @@ impl CommandRemap {
     /// Forget held state (on leave/disconnect). Returns releases still owed.
     pub fn reset(&mut self) -> Vec<(u16, bool)> {
         self.held.clear();
+        self.mods_held.clear();
         self.emitted
             .take()
             .map(|m| vec![(m, false)])
@@ -291,16 +424,97 @@ mod tests {
     use super::ev::*;
     use super::*;
 
+    const W: u16 = 17;
+    const T: u16 = 20;
+    const F: u16 = 33;
+
     fn remap() -> CommandRemap {
-        let mut keys = CommandRemap::default_super_keys();
-        keys.extend([C, V, X]);
-        CommandRemap::new(keys)
+        let mut super_keys = CommandRemap::default_super_keys();
+        super_keys.extend([C, V, X]);
+        CommandRemap::new(CommandKeys {
+            super_keys,
+            ..Default::default()
+        })
+    }
+
+    /// Like Omarchy: Super+W closes, Super+Shift+F opens files, Super+F is full screen.
+    fn omarchy() -> CommandRemap {
+        let mut r = remap();
+        r.keys.super_combos = [(W, 0), (F, 0), (F, mods::SHIFT)].into();
+        r
+    }
+
+    #[test]
+    fn command_follows_desktop_shortcuts() {
+        let mut r = omarchy();
+        r.map(LEFTMETA, true);
+        assert_eq!(r.map(W, true), vec![(LEFTMETA, true), (W, true)]);
+        r.map(W, false);
+        assert_eq!(r.map(LEFTMETA, false), vec![(LEFTMETA, false)]);
+
+        // Super+T isn't bound here, so ⌘T is still a new tab.
+        r.map(LEFTMETA, true);
+        assert_eq!(r.map(T, true), vec![(LEFTCTRL, true), (T, true)]);
+    }
+
+    #[test]
+    fn desktop_shortcuts_match_other_modifiers() {
+        let mut r = omarchy();
+        r.map(LEFTMETA, true);
+        assert_eq!(r.map(LEFTSHIFT, true), vec![(LEFTSHIFT, true)]);
+        assert_eq!(r.map(F, true), vec![(LEFTMETA, true), (F, true)]);
+        r.map(F, false);
+        r.map(LEFTSHIFT, false);
+        r.map(LEFTMETA, false);
+
+        // Nothing is bound to Super+Shift+W, so ⌘⇧W goes to the app.
+        r.map(LEFTMETA, true);
+        r.map(LEFTSHIFT, true);
+        assert_eq!(r.map(W, true), vec![(LEFTCTRL, true), (W, true)]);
+    }
+
+    #[test]
+    fn ctrl_override_beats_desktop() {
+        let mut r = omarchy();
+        r.keys.ctrl_keys.insert(F);
+        r.map(LEFTMETA, true);
+        assert_eq!(r.map(F, true), vec![(LEFTCTRL, true), (F, true)]);
+    }
+
+    #[test]
+    fn overrides_from_settings() {
+        let mut keys = CommandKeys::default();
+        keys.super_combos.insert((F, 0));
+        let set = |k: &str, v: &str| (k.to_string(), v.to_string());
+        let overrides = [
+            set("f", "ctrl"),
+            set("T", "Super"),
+            set("nope", "ctrl"),
+            set("W", "alt"),
+        ];
+        let bad = keys.apply_overrides(overrides.iter().map(|(k, v)| (k, v)));
+        assert_eq!(bad, ["nope = \"ctrl\"", "W = \"alt\""]);
+        assert!(!keys.wants_super(F, 0));
+        assert!(keys.wants_super(T, mods::SHIFT));
+    }
+
+    #[test]
+    fn names_hyprland_keys() {
+        assert_eq!(evdev_from_name("W"), Some(W));
+        assert_eq!(evdev_from_name("q"), Some(16));
+        assert_eq!(evdev_from_name("RETURN"), Some(ENTER));
+        assert_eq!(evdev_from_name("comma"), Some(51));
+        assert_eq!(evdev_from_name("code:10"), Some(2)); // 1
+        assert_eq!(evdev_from_name("0"), Some(11));
+        assert_eq!(evdev_from_name("F12"), Some(88));
+        assert_eq!(evdev_from_name("Delete"), Some(111));
+        assert_eq!(evdev_from_name("mouse:272"), None);
+        assert_eq!(evdev_from_name("XF86AudioMute"), None);
     }
 
     #[test]
     fn command_t_becomes_ctrl_t() {
         let mut r = remap();
-        const T: u16 = 20;
         assert_eq!(r.map(LEFTMETA, true), vec![]);
         assert_eq!(r.map(T, true), vec![(LEFTCTRL, true), (T, true)]);
         assert_eq!(r.map(T, false), vec![(T, false)]);
@@ -317,7 +531,6 @@ mod tests {
     #[test]
     fn switches_modifier_mid_hold() {
         let mut r = remap();
-        const T: u16 = 20;
         r.map(LEFTMETA, true);
         r.map(T, true);
         r.map(T, false);

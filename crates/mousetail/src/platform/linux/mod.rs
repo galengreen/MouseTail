@@ -22,7 +22,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
-use mousetail_core::keys::{CommandRemap, ev};
+use mousetail_core::keys::{self, CommandKeys, CommandRemap, ev, mods};
 use mousetail_core::layout::Rect;
 use mousetail_core::proto::{DisplayInfo, MediaKey, Scroll};
 use serde::Deserialize;
@@ -103,21 +103,36 @@ struct HyprBind {
     modmask: u32,
     #[serde(default)]
     key: String,
+    #[serde(default)]
+    keycode: u32,
+    #[serde(default)]
+    mouse: bool,
+    #[serde(default)]
+    submap: String,
 }
 
-/// Command → Super for desktop shortcuts, plus copy/paste when the desktop binds Super+C/V/X
-/// to universal clipboard actions (Omarchy does).
-pub fn command_super_keys() -> HashSet<u16> {
+/// What Command becomes here: Super for every Super shortcut the desktop binds, with the
+/// same other modifiers (Hyprland's binds: Omarchy's Super+W close window, Super+C/V/X
+/// universal copy and paste…), plus the desktop-level defaults; Ctrl for everything else.
+pub fn command_keys() -> CommandKeys {
     const SUPER: u32 = 64;
-    let mut keys = CommandRemap::default_super_keys();
-    if let Some(binds) = hyprctl_json::<Vec<HyprBind>>(&["binds"]) {
-        for b in binds.iter().filter(|b| b.modmask == SUPER) {
-            match b.key.to_ascii_uppercase().as_str() {
-                "C" => keys.insert(ev::C),
-                "V" => keys.insert(ev::V),
-                "X" => keys.insert(ev::X),
-                _ => false,
-            };
+    let mut keys = CommandKeys {
+        super_keys: CommandRemap::default_super_keys(),
+        ..Default::default()
+    };
+    let binds = hyprctl_json::<Vec<HyprBind>>(&["binds"]).unwrap_or_default();
+    for b in binds {
+        if b.modmask & SUPER == 0 || b.mouse || !b.submap.is_empty() {
+            continue;
+        }
+        let code = if b.key.is_empty() {
+            keys::evdev_from_name(&format!("code:{}", b.keycode))
+        } else {
+            keys::evdev_from_name(&b.key)
+        };
+        let mods = (b.modmask & !SUPER) as u8 & (mods::SHIFT | mods::CTRL | mods::ALT);
+        if let Some(code) = code {
+            keys.super_combos.insert((code, mods));
         }
     }
     keys
