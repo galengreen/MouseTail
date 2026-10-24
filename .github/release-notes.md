@@ -1,5 +1,14 @@
 ## What's new
 
+- 0.2.13: From a Mac, ⌘ now follows Linux's own Super shortcuts, as if a Mac keyboard were
+  plugged in. On Omarchy ⌘W closes the window in every app (it used to send Ctrl+W, which
+  only closed browser tabs and deleted a word in terminals), and every Super shortcut works
+  with ⌘, like ⌘⇧B for the browser. ⌘ plus anything the desktop doesn't use is still Ctrl
+  for the app: ⌘A, ⌘Z, ⌘N. To pick for yourself, add `[settings.command_keys]` to the
+  config, e.g. `F = "ctrl"` to keep ⌘F as find. Only the Linux computer needs updating.
+
+From 0.2.12:
+
 - 0.2.12: MouseTail now works on GNOME (thanks to Ming Bao). It shares this computer's mouse
   and keyboard through GNOME's input capture, which asks your permission the first time, and
   adds a MouseTail menu to the top bar on GNOME 50. If you stop the sharing from GNOME,

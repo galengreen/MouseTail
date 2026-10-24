@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nz.galengreen.mousetail",
   "name": "MouseTail",
-  "version": "0.2.12",
+  "version": "0.2.13",
   "author": "Galen Green",
   "license": "MIT",
   "description": "Share one keyboard, mouse, clipboard and sound between this computer and the ones beside it. Shows what's connected and any pairing code.",
